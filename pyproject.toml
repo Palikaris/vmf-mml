@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vmf-mml"
+version = "0.1.0"
+description = "von Mises-Fisher parameter estimation with ML, Schou, and MML methods"
+readme = "README.md"
+authors = [
+    {name = "Aris Gioutlakis", email = "arissafaris@gmail.com"},
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "matplotlib>=3.7.0",
+    "pandas>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.3.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "mypy>=1.3.0",
+    "ruff>=0.0.270",
+]
+experiments = [
+    "scikit-learn>=1.2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vmf_estimation*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I", "N"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --cov=vmf_estimation --cov-report=term-missing"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
