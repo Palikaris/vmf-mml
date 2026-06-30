@@ -13,7 +13,7 @@ as Maximum Likelihood and Schou's bias-corrected estimator.
 ## Installation
 
 ```bash
-git clone https://github.com/Gioutlakis/vmf-mml.git
+git clone https://github.com/Palikaris/vmf-mml.git
 cd vmf-mml
 pip install -e .
 ```

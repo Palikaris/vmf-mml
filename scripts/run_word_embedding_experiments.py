@@ -166,7 +166,7 @@ def run_experiments(X, y_true, k_range=None):
 # Plotting
 # ---------------------------------------------------------------------------
 
-def plot_results(results, true_k=TRUE_K, dataset_name="Digits (d=64)"):
+def plot_results(results, true_k=TRUE_K, dataset_name="20 Newsgroups (d=2000)"):
     os.makedirs("figures", exist_ok=True)
     Ks = sorted(results.keys())
 
@@ -251,13 +251,15 @@ if __name__ == "__main__":
 
     if args.newsgroups:
         X, y_true = load_newsgroups()
+        dataset_name = f"20 Newsgroups (d={X.shape[1]})"
     else:
         X, y_true = load_data()
+        dataset_name = f"Digits (d={X.shape[1]})"
 
     K_RANGE_RUN = args.k_range
     results = run_experiments(X, y_true, k_range=K_RANGE_RUN)
     print_summary_table(results)
-    minima = plot_results(results)
+    minima = plot_results(results, dataset_name=dataset_name)
     print(
         f"\nSelected K:  AIC={minima['best_aic']}  "
         f"BIC={minima['best_bic']}  MML={minima['best_mml']}  (True K={TRUE_K})"
