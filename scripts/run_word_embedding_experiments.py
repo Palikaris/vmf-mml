@@ -2,12 +2,17 @@
 Real-data experiments for vMF mixture model selection.
 
 Supports two datasets:
-  - 20 Newsgroups (default with --newsgroups flag): TF-IDF unit vectors,
-    d=2000, N=2000, 10 ground-truth topic categories.
-  - sklearn digits (built-in fallback): 64-dimensional digit images
-    L2-normalised to the unit sphere, 10 ground-truth classes.
+  - 20 Newsgroups (DEFAULT): TF-IDF unit vectors, d=2000, N=2000, 10
+    ground-truth topic categories.  This is the experiment reported in the
+    paper; running this script with no arguments reproduces it (the corpus
+    is downloaded on first use and cached by scikit-learn).
+  - sklearn digits (--digits): 64-dimensional digit images L2-normalised to
+    the unit sphere, 10 ground-truth classes.  A local, download-free
+    stand-in used during development; NOT the experiment reported in the
+    paper.
 
-Results are saved to figures/model_selection_newsgroups.{pdf,png}.
+Results are saved to figures/model_selection_<dataset>.{pdf,png}, so a
+digits run cannot overwrite the newsgroups figure.
 """
 
 import os
@@ -33,8 +38,8 @@ from vmf_estimation.model_selection import aic, bic, mml_message_length
 # Configuration
 # ---------------------------------------------------------------------------
 
-TRUE_K = 10    # digits dataset has 10 classes (0-9)
-K_RANGE = [2, 4, 6, 8, 10, 12, 14]
+TRUE_K = 10    # both datasets have 10 ground-truth classes
+K_RANGE = [5, 10, 15, 20, 25]    # as reported in the paper
 MOVMF_KWARGS = {"n_init": 2, "max_iter": 50, "tol": 1e-4, "random_state": 42}
 
 
@@ -71,8 +76,9 @@ def load_newsgroups(
     """
     Load 20 Newsgroups, vectorise with TF-IDF, and L2-normalise.
 
-    Requires network access (or a pre-cached download).
-    Preserved here for when the dataset is available.
+    Ten categories (two each of sport, science, politics, computing and
+    religion), giving K=10 ground-truth clusters, as reported in the paper.
+    Requires network access on first use; scikit-learn caches thereafter.
     """
     from sklearn.datasets import fetch_20newsgroups
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -107,6 +113,65 @@ def load_newsgroups(
     return X, y
 
 
+def reduce_lsa(X, n_components, random_state=42):
+    """
+    Latent semantic analysis: project onto n_components singular vectors and
+    re-normalise to the unit sphere S^{n_components - 1}.
+
+    The vMF model is unchanged by this step -- it applies to any set of unit
+    vectors.  What changes is the regime: reducing d while holding N fixed
+    raises the per-tangent-dimension Fisher information F_mu = n_i k_i A_d(k_i)
+    of each component mean, which is what collapses to zero at d ~ N.
+    """
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.preprocessing import normalize as skl_norm
+
+    print(f"Reducing {X.shape[1]}D -> {n_components}D via TruncatedSVD…")
+    svd = TruncatedSVD(n_components=n_components, random_state=random_state)
+    Xr = svd.fit_transform(X)
+    ev = float(svd.explained_variance_ratio_.sum())
+    Xr = skl_norm(Xr, norm="l2")
+    print(f"  Shape: {Xr.shape}   explained variance: {ev:.3f}")
+    return Xr
+
+
+def report_fisher_mu(model, N, d, label="", quiet=False):
+    """
+    Report the per-tangent-dimension Fisher information of each component mean,
+
+        F_mu = n_i * kappa_i * A_d(kappa_i),
+
+    and how many components fall below 2*pi.  The MML encoding cost for a
+    component mean is
+
+        (d-1)/2 * max(0, 1 + log(F_mu / (2*pi*e))),
+
+    which is exactly zero when F_mu < 2*pi.  This is the quantity behind the
+    degenerate-mean behaviour reported for the unreduced TF-IDF vectors, so it
+    is worth measuring rather than only asserting.
+    """
+    from vmf_estimation.core import bessel_ratio_A
+
+    kappas = np.asarray(model.kappas_, dtype=float)
+    n_i = np.asarray(model.weights_, dtype=float) * N
+    A = np.array([bessel_ratio_A(float(k), d) for k in kappas])
+    F_mu = n_i * kappas * A
+    below = int((F_mu < 2 * math.pi).sum())
+
+    if not quiet:
+        print(f"\n  F_mu diagnostic {label} (d={d}, N={N}, K={len(kappas)}):")
+        print(f"    kappa_i : min={kappas.min():.3f}  median={np.median(kappas):.3f}"
+              f"  max={kappas.max():.3f}")
+        print(f"    n_i     : min={n_i.min():.1f}  median={np.median(n_i):.1f}"
+              f"  max={n_i.max():.1f}")
+        print(f"    F_mu    : min={F_mu.min():.3g}  median={np.median(F_mu):.3g}"
+              f"  max={F_mu.max():.3g}   (2*pi = {2 * math.pi:.3f})")
+        print(f"    components with F_mu < 2*pi: {below}/{len(kappas)} "
+              f"-> mean encoding cost is zero for these")
+    return {"kappas": kappas.tolist(), "n_i": n_i.tolist(),
+            "F_mu": F_mu.tolist(), "n_below_2pi": below}
+
+
 # ---------------------------------------------------------------------------
 # Clustering quality
 # ---------------------------------------------------------------------------
@@ -120,6 +185,52 @@ def clustering_quality(y_true, y_pred):
         for k in np.unique(y_pred) if (y_pred == k).sum() > 0
     ) / N
     return {"ari": ari, "nmi": nmi, "purity": purity}
+
+
+def run_baselines(X, y_true, k_range):
+    """
+    Non-vMF baselines requested in review: spherical k-means and, where the
+    representation is dense and low-dimensional enough to admit it, a Gaussian
+    mixture in the reduced space.
+
+    Note that X is already L2-normalised, so Lloyd's algorithm on X with
+    Euclidean distance is exactly spherical k-means: for unit vectors,
+    ||x - c||^2 = 2 - 2 x.c is monotone decreasing in cosine similarity.
+    """
+    from sklearn.cluster import KMeans
+
+    N, d = X.shape
+    out = {}
+    dense_ok = (not scipy_sparse_check(X)) and d <= 400
+
+    print(f"\nBaselines (N={N}, d={d})…")
+    for K in k_range:
+        row = {}
+        km = KMeans(n_clusters=K, n_init=10, random_state=42).fit(X)
+        row["skmeans"] = clustering_quality(y_true, km.labels_)
+
+        if dense_ok:
+            from sklearn.mixture import GaussianMixture
+            gm = GaussianMixture(
+                n_components=K, covariance_type="diag",
+                max_iter=200, n_init=2, random_state=42,
+            ).fit(X)
+            row["gmm"] = clustering_quality(y_true, gm.predict(X))
+        else:
+            row["gmm"] = None
+
+        out[K] = row
+        g = row["gmm"]
+        print(f"  K={K:3d} | sph. k-means ARI={row['skmeans']['ari']:.3f} "
+              f"NMI={row['skmeans']['nmi']:.3f}"
+              + (f"   | GMM ARI={g['ari']:.3f} NMI={g['nmi']:.3f}"
+                 if g else "   | GMM skipped (sparse or d>400)"))
+    return out
+
+
+def scipy_sparse_check(X):
+    import scipy.sparse
+    return scipy.sparse.issparse(X)
 
 
 # ---------------------------------------------------------------------------
@@ -146,18 +257,22 @@ def run_experiments(X, y_true, k_range=None):
 
         labels = model.predict(X)
         quality = clustering_quality(y_true, labels)
+        fmu = report_fisher_mu(model, N, d, quiet=True)
 
         results[K] = {
             "model": model, "log_lik": ll,
             "aic": aic_score, "bic": bic_score, "mml": mml_score,
             "labels": labels,
             "ari": quality["ari"], "nmi": quality["nmi"], "purity": quality["purity"],
+            "fisher_mu": fmu,
             "elapsed": elapsed,
         }
         print(
             f"  K={K:2d} | log-lik={ll:10.1f}  "
             f"ARI={quality['ari']:.3f}  NMI={quality['nmi']:.3f}  "
-            f"purity={quality['purity']:.3f}  ({elapsed:.1f}s)"
+            f"purity={quality['purity']:.3f}  "
+            f"F_mu(med)={np.median(fmu['F_mu']):.3g} "
+            f"[{fmu['n_below_2pi']}/{K} < 2pi]  ({elapsed:.1f}s)"
         )
     return results
 
@@ -209,9 +324,12 @@ def plot_results(results, true_k=TRUE_K, dataset_name="20 Newsgroups (d=2000)"):
     ax2.grid(alpha=0.3)
 
     fig.tight_layout()
-    fig.savefig("figures/model_selection_newsgroups.pdf", dpi=150)
-    fig.savefig("figures/model_selection_newsgroups.png", dpi=150)
-    print("\nSaved figures/model_selection_newsgroups.{pdf,png}")
+    slug = "digits" if dataset_name.lower().startswith("digits") else "newsgroups"
+    if "lsa" in dataset_name.lower():
+        slug += "_lsa"
+    fig.savefig(f"figures/model_selection_{slug}.pdf", dpi=150)
+    fig.savefig(f"figures/model_selection_{slug}.png", dpi=150)
+    print(f"\nSaved figures/model_selection_{slug}.{{pdf,png}}")
     plt.close(fig)
     return {"best_aic": best_aic, "best_bic": best_bic, "best_mml": best_mml}
 
@@ -239,26 +357,57 @@ if __name__ == "__main__":
         description="vMF mixture model selection on word embedding / image data"
     )
     parser.add_argument(
-        "--newsgroups", action="store_true",
-        help="Use 20 Newsgroups TF-IDF unit vectors (requires network/cached download). "
-             "Without this flag, uses the sklearn digits dataset as a local stand-in."
+        "--digits", action="store_true",
+        help="Use the sklearn digits dataset (local, no download) instead of "
+             "20 Newsgroups. This is a development stand-in and is NOT the "
+             "experiment reported in the paper."
     )
     parser.add_argument(
         "--k-range", nargs="+", type=int, default=K_RANGE,
-        help="List of K values to try (default: 2 4 6 8 10 12 14)"
+        help="List of K values to try (default: 5 10 15 20 25, as in the paper)"
+    )
+    parser.add_argument(
+        "--baselines", action="store_true",
+        help="Also run spherical k-means and (in reduced dense space) a "
+             "Gaussian mixture, reporting ARI/NMI against the ground truth."
+    )
+    parser.add_argument(
+        "--lsa", type=int, default=None, metavar="DIM",
+        help="Apply latent semantic analysis (TruncatedSVD) to DIM dimensions "
+             "and re-normalise to the unit sphere before fitting. Typical: 100."
     )
     args = parser.parse_args()
 
-    if args.newsgroups:
-        X, y_true = load_newsgroups()
-        dataset_name = f"20 Newsgroups (d={X.shape[1]})"
-    else:
+    if args.digits:
         X, y_true = load_data()
         dataset_name = f"Digits (d={X.shape[1]})"
+    else:
+        X, y_true = load_newsgroups()
+        dataset_name = f"20 Newsgroups (d={X.shape[1]})"
+
+    if args.lsa:
+        X = reduce_lsa(X, args.lsa)
+        dataset_name = f"{dataset_name.split(' (')[0]} + LSA (d={X.shape[1]})"
 
     K_RANGE_RUN = args.k_range
     results = run_experiments(X, y_true, k_range=K_RANGE_RUN)
     print_summary_table(results)
+
+    if args.baselines:
+        base = run_baselines(X, y_true, K_RANGE_RUN)
+        print("\n" + "=" * 70)
+        print("BASELINE COMPARISON  (ARI / NMI against ground truth)")
+        print("=" * 70)
+        print(f"{'K':>4}  {'vMF mixture':>18}  {'sph. k-means':>18}  {'GMM':>18}")
+        for K in K_RANGE_RUN:
+            v = results[K]
+            s = base[K]["skmeans"]
+            g = base[K]["gmm"]
+            gtxt = f"{g['ari']:.3f} / {g['nmi']:.3f}" if g else "n/a"
+            print(f"{K:>4}  {v['ari']:.3f} / {v['nmi']:.3f}".ljust(26)
+                  + f"{s['ari']:.3f} / {s['nmi']:.3f}".rjust(18)
+                  + f"{gtxt}".rjust(20))
+        print()
     minima = plot_results(results, dataset_name=dataset_name)
     print(
         f"\nSelected K:  AIC={minima['best_aic']}  "
