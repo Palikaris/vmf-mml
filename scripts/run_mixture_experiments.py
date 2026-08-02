@@ -50,8 +50,11 @@ SCENARIOS = [
     (3, 2, 2.0, 500),
 ]
 
-N_TRIALS = 20
-K_RANGE = list(range(1, 7))
+# Defaults reproduce Table 1 of the paper.  Overridable from the command line
+# (--trials / --k-max / --restarts) for robustness checks; note that runtime is
+# multiplicative in all three, so raising them is not free.
+N_TRIALS = 100
+K_RANGE = list(range(1, 9))
 MOVMF_KWARGS = {"n_init": 2, "max_iter": 50, "tol": 1e-4}
 N_MC_KL = 5000   # Monte Carlo samples for KL estimation
 
@@ -252,7 +255,25 @@ def plot_results(records):
 
 
 if __name__ == "__main__":
-    print(f"Running {N_TRIALS} trials × {len(SCENARIOS)} scenarios...")
+    import argparse
+    _p = argparse.ArgumentParser(
+        description="vMF mixture model-selection simulation study. "
+                    "Defaults reproduce Table 1 of the paper."
+    )
+    _p.add_argument("--trials", type=int, default=N_TRIALS,
+                    help=f"Monte Carlo trials per scenario (default {N_TRIALS})")
+    _p.add_argument("--k-max", type=int, default=max(K_RANGE),
+                    help=f"Largest candidate K (default {max(K_RANGE)})")
+    _p.add_argument("--restarts", type=int, default=MOVMF_KWARGS["n_init"],
+                    help="EM restarts per fit (default "
+                         f"{MOVMF_KWARGS['n_init']}); runtime scales linearly")
+    _a = _p.parse_args()
+    N_TRIALS = _a.trials
+    K_RANGE = list(range(1, _a.k_max + 1))
+    MOVMF_KWARGS = dict(MOVMF_KWARGS, n_init=_a.restarts)
+
+    print(f"Running {N_TRIALS} trials × {len(SCENARIOS)} scenarios "
+          f"(K candidates {K_RANGE}, {MOVMF_KWARGS['n_init']} restarts)...")
     records = run_experiments()
     summary = print_summary_table(records)
     plot_results(records)
