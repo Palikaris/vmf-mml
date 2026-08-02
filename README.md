@@ -97,6 +97,9 @@ best_k, results = select_k(X, k_range=range(1, 8), method='mml')
 
 ## Reproducing paper results
 
+Each command below reproduces the corresponding table and figure with the
+script defaults; no arguments are required.
+
 ### Simulated data experiments (Table 1 / Figure 1)
 
 ```bash
@@ -104,14 +107,40 @@ python scripts/run_mixture_experiments.py
 # → figures/model_selection_simulated.{pdf,png}
 ```
 
+100 Monte Carlo trials per scenario over candidates K ∈ {1,…,8}, with two EM
+restarts per fit. `--trials`, `--k-max` and `--restarts` are available for
+robustness checks; runtime is multiplicative in all three, so the defaults
+take roughly 40 minutes.
+
 ### 20 Newsgroups experiments (Table 2 / Figure 2)
 
 ```bash
-python scripts/run_word_embedding_experiments.py --newsgroups --k-range 5 10 15 20 25
+python scripts/run_word_embedding_experiments.py
 # → figures/model_selection_newsgroups.{pdf,png}
 ```
 
-The 20 Newsgroups corpus is downloaded automatically by scikit-learn on first run.
+ℓ₂-normalised TF-IDF vectors, d = 2000, N = 2000, K ∈ {5,10,15,20,25}. The
+corpus is downloaded automatically by scikit-learn on first run. Each fitted
+K also reports the per-tangent-dimension Fisher information
+F_μ = n_i·κ_i·A_d(κ_i) of the component means, and how many components fall
+below 2π — the quantity behind the vanishing mean encoding cost discussed in
+the paper.
+
+### LSA-reduced experiments (Table 3 / Figure 3)
+
+```bash
+python scripts/run_word_embedding_experiments.py --lsa 100 \
+    --k-range 5 10 15 20 25 30 40 50 75 100
+# → figures/model_selection_newsgroups_lsa.{pdf,png}
+```
+
+### Baselines (spherical k-means, Gaussian mixture)
+
+Add `--baselines` to either real-data command to report ARI and NMI for
+spherical k-means and, where the representation is dense and d ≤ 400, a
+Gaussian mixture. The digits dataset is available via `--digits` as a
+download-free development stand-in; it is not an experiment reported in the
+paper.
 
 ---
 
